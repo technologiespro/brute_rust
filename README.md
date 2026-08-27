@@ -1,133 +1,102 @@
-# Крипто-брутфорсер на Rust (v0.2 - CUDA)
+# Bitcoin Private Key Brute-Forcer in Rust (v0.2 - CUDA)
 
-Утилита для высокоскоростного перебора приватных ключей Bitcoin и поиска
-совпадений с базой данных адресов. В v0.2 добавлена ветка, целиком
-работающая на GPU (CUDA).
+A high-speed utility for brute-forcing Bitcoin private keys and searching for matches against a database of addresses. In v0.2, a fully GPU-accelerated (CUDA) execution path has been introduced.
 
-## Особенности
+## Features
 
-- **CUDA-ускорение** - генерация ключей (`secp256k1`), сериализация
-  сжатого публичного ключа и HASH160 полностью выполняются на GPU в
-  собственном ядре (см. `src/kernel.cu`). Ядро компилируется на лету
-  через NVRTC, поэтому отдельно вызывать `nvcc` не нужно.
-- **CPU fallback** - оригинальный многопоточный CPU-режим сохранён и
-  включается ключом `--cpu-only` (либо автоматически, если открыть
-  GPU не удалось).
-- **Быстрая проверка** - адреса из базы разбираются в множества
-  `hash160` (для P2PKH/P2WPKH и P2SH-P2WPKH), поэтому вместо парсинга
-  строк на каждую попытку выполняется дешёвый lookup по 20-байтному
-  ключу.
-- **Все три типа адресов** проверяются одновременно:
+- **CUDA Acceleration** - key generation (`secp256k1`), compressed public key serialization, and HASH160 computation are performed entirely on the GPU in a custom kernel (see `src/kernel.cu`). The kernel is compiled on-the-fly via NVRTC, so invoking `nvcc` separately is not required.
+- **CPU Fallback** - the original multi-threaded CPU mode is preserved and can be enabled with the `--cpu-only` flag (or automatically if the GPU fails to initialize).
+- **Fast Lookup** - addresses from the database are parsed into `hash160` sets (for P2PKH/P2WPKH and P2SH-P2WPKH). Instead of parsing strings on every attempt, a fast lookup against a 20-byte key is performed.
+- **All three address types** are checked simultaneously:
   - P2PKH (`1...`)
   - P2SH-P2WPKH (`3...`)
   - P2WPKH (`bc1q...`)
 
-## Требования
+## Requirements
 
-| Компонент | Версия |
+| Component | Version |
 |-----------|--------|
 | Rust      | stable ≥ 1.74 |
-| CUDA Toolkit | 13.0+ (feature `cuda-13000`; см. `Cargo.toml`, если нужно старее) |
-| NVIDIA driver | совместимый с установленным Toolkit |
-| GPU | любой NVIDIA GPU с Compute Capability ≥ 6.0 |
+| CUDA Toolkit | 13.0+ (feature `cuda-13000`; see `Cargo.toml` if an older version is needed) |
+| NVIDIA driver | compatible with the installed Toolkit |
+| GPU | any NVIDIA GPU with Compute Capability ≥ 6.0 |
 
-## Сборка
+## Build
 
 ```sh
 cd brute_rust
 cargo build --release
 ```
 
-Исполняемый файл будет в `target/release/brute_rust[.exe]`.
+The executable will be located at `target/release/brute_rust[.exe]`.
 
-Если вы хотите собрать **только CPU-версию без CUDA** (например, на машине
-без CUDA Toolkit):
+If you want to build the **CPU-only version without CUDA** (e.g., on a machine without the CUDA Toolkit):
 
 ```sh
 cargo build --release --no-default-features
 ```
 
-Собранный таким образом бинарник автоматически идёт по CPU-ветке.
+The resulting binary will automatically default to the CPU execution path.
 
-## Использование
+## Usage
 
-По умолчанию используется GPU:
+GPU is used by default:
 
 ```sh
 target/release/brute_rust --path ../addrs/
 ```
 
-### Аргументы
+### Arguments
 
-| Флаг | По умолчанию | Описание |
+| Flag | Default | Description |
 |------|--------------|----------|
-| `--path <ПУТЬ>` | `../addrs/` | Директория с файлом `btc.tsv`. |
-| `--gpu-id <N>` | `0` | Индекс CUDA-устройства. |
-| `--batch <N>` | `1048576` | Количество ключей за один запуск GPU-ядра. Увеличьте на мощных GPU (RTX 4090 / A100: 2–4 M), уменьшите на слабых. |
-| `--cpu-only` | `false` | Не использовать GPU, работать только на CPU. |
-| `--cpu <N>` | `0` (= все) | Количество потоков в CPU-режиме. |
+| `--path <PATH>` | `../addrs/` | Directory containing the `btc.tsv` file. |
+| `--gpu-id <N>` | `0` | CUDA device index. |
+| `--batch <N>` | `1048576` | Number of keys per GPU kernel launch. Increase for powerful GPUs (RTX 4090 / A100: 2–4M), decrease for weaker ones. |
+| `--cpu-only` | `false` | Do not use GPU, run on CPU only. |
+| `--cpu <N>` | `0` (= all) | Number of threads in CPU mode. |
 
-### Примеры
+### Examples
 
-- **GPU, GPU-устройство 0, батч 1M:**
+- **GPU, device 0, batch 1M:**
   ```sh
   target/release/brute_rust
   ```
-- **GPU-устройство 1, батч 4M:**
+- **GPU device 1, batch 4M:**
   ```sh
   target/release/brute_rust --gpu-id 1 --batch 4194304
   ```
-- **Только CPU, 4 потока:**
+- **CPU only, 4 threads:**
   ```sh
   target/release/brute_rust --cpu-only --cpu 4
   ```
 
-## Как это работает на GPU
+## How it works on the GPU
 
-1. При старте на CPU строится прекомпутированная таблица кратных базовой
-   точки `G`: 64 окна по 15 записей вида `k · 16^i · G` в аффинных
-   координатах (60 KiB). Таблица один раз копируется на GPU (см.
-   `src/precompute.rs`).
-2. Для каждого батча CPU генерирует 256-битный «базовый seed» и
-   запускает ядро `brute_kernel` с `batch_size` потоками.
-3. Каждый поток:
-   - выводит свой приватный ключ из `(base_seed, thread_id)` через
-     SplitMix64 (та же реализация есть на CPU в `src/gpu.rs`, что
-     позволяет однозначно восстановить ключ при совпадении);
-   - вычисляет `P = k · G` в якобиевых координатах, суммируя нужные
-     точки из прекомпутированной таблицы (64 mixed-additions);
-   - приводит `P` к аффинному виду (модульная инверсия по малой теореме
-     Ферма) и сериализует сжатый публичный ключ (33 байта);
-   - считает `h1 = HASH160(pubkey)` и `h2 = HASH160(0x00 || 0x14 || h1)` -
-     это hash160 для P2PKH/P2WPKH и P2SH-P2WPKH соответственно;
-   - записывает `h1` и `h2` в выходные буферы.
-4. CPU получает 40 MB данных обратно (по 20 байт на ключ на каждый
-   тип) и проверяет их против `AHashSet<[u8; 20]>`. При совпадении по
-   `thread_id` детерминированно восстанавливается приватный ключ и с
-   помощью надёжной библиотеки `secp256k1` заново строятся все три
-   адреса и WIF для записи в `found.json`.
+1. At startup, the CPU builds a precomputed table of multiples of the base point `G`: 64 windows of 15 entries each in the form `k · 16^i · G` in affine coordinates (60 KiB). This table is copied to the GPU once (see `src/precompute.rs`).
+2. For each batch, the CPU generates a 256-bit "base seed" and launches the `brute_kernel` with `batch_size` threads.
+3. Each thread:
+    - derives its private key from `(base_seed, thread_id)` via SplitMix64 (the same implementation exists on the CPU in `src/gpu.rs`, allowing deterministic key recovery upon a match);
+    - computes `P = k · G` in Jacobian coordinates by summing the required points from the precomputed table (64 mixed-additions);
+    - converts `P` to affine coordinates (modular inversion via Fermat's Little Theorem) and serializes the compressed public key (33 bytes);
+    - computes `h1 = HASH160(pubkey)` and `h2 = HASH160(0x00 || 0x14 || h1)` - these are the hash160 values for P2PKH/P2WPKH and P2SH-P2WPKH, respectively;
+    - writes `h1` and `h2` to the output buffers.
+4. The CPU receives 40 MB of data back (20 bytes per key for each type) and checks them against an `AHashSet<[u8; 20]>`. Upon a match, the private key is deterministically recovered by `thread_id`, and all three addresses plus the WIF are reliably reconstructed using the `secp256k1` crate for logging into `found.json`.
 
-## Найденные ключи
+## Found Keys
 
-При совпадении программа пишет `found.json` в текущей директории с
-полями:
+Upon a match, the program writes `found.json` in the current directory with the following fields:
 
-- `coin` - всегда `"BTC"` в этой версии.
-- `matched_type` - какой тип адреса совпал (`P2PKH/P2WPKH` или
-  `P2SH-P2WPKH`).
-- `private_key_hex` - приватный ключ в HEX.
-- `wif` - приватный ключ в WIF.
-- `address` - все три сгенерированных адреса.
+- `coin` - always `"BTC"` in this version.
+- `matched_type` - which address type matched (`P2PKH/P2WPKH` or `P2SH-P2WPKH`).
+- `private_key_hex` - private key in HEX format.
+- `wif` - private key in WIF format.
+- `address` - all three generated addresses.
 
-## Замечания по производительности
+## Performance Notes
 
-- `src/kernel.cu` написан «в лоб» ради ясности. Наиболее дорогая
-  операция - модульная инверсия при переводе Якоби → аффин
-  (~256 modmul на поток). На RTX 3060 стоит ждать порядка нескольких
-  миллионов ключей в секунду; на RTX 4090 - заметно больше.
-- Значительное ускорение даёт **батчинг инверсий по трюку Монтгомери**
-  (одна инверсия на 32–256 ключей вместо одной на ключ) - при желании
-  это можно добавить в `to_affine` и одноимённый шаг в `scalar_mul_g`.
-- Если ваша база адресов пустая после парсинга (`AddressDb` показывает
-  0 адресов), проверьте формат `btc.tsv`: первая колонка каждой строки
-  - сам адрес, разделитель - табуляция.
+- `src/kernel.cu` is written in a straightforward manner for clarity. The most expensive operation is the modular inversion during the Jacobian → affine conversion (~256 modmuls per thread). On an RTX 3060, expect a few million keys per second; on an RTX 4090, significantly more.
+- A significant speedup can be achieved by **batching inversions using Montgomery's trick** (one inversion per 32–256 keys instead of one per key). If desired, this can be added to `to_affine` and the corresponding step in `scalar_mul_g`.
+- If your address database is empty after parsing (`AddressDb` shows 0 addresses), check the format of `btc.tsv`: the first column of each row must be the address itself, separated by a tab.
+
+
