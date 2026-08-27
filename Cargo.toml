@@ -1,7 +1,7 @@
 [package]
 name = "brute_rust"
-version = "0.1.0"
-edition = "2024"
+version = "0.2.0"
+edition = "2021"
 
 [dependencies]
 rand = "0.8"
@@ -13,7 +13,33 @@ serde_json = "1.0"
 clap = { version = "4.5.4", features = ["derive"] }
 rayon = "1.10.0"
 num_cpus = "1.16.0"
+sha2 = "0.10"
+ripemd = "0.1"
+bs58 = { version = "0.5", features = ["check"] }
+bech32 = "0.9"
+anyhow = "1"
+ahash = "0.8"
 
+# CUDA support. Uses NVRTC (runtime compilation of the .cu kernel), so no
+# build.rs or nvcc invocation is required — just the CUDA Toolkit must be
+# reachable via PATH / CUDA_PATH so that libcuda and libnvrtc can be found.
+# CUDA support. Uses NVRTC (runtime compilation of the .cu kernel), so no
+# build.rs of your own is required — just the CUDA Toolkit must be installed
+# and the driver (libcuda) reachable at run time. The `cuda-13000` feature
+# selects the CUDA 13.x API bindings; change it to `cuda-12080` (or similar)
+# if you're on an older toolkit.
+[dependencies.cudarc]
+version = "0.19"
+default-features = false
+features = ["driver", "nvrtc", "std", "cuda-13000", "dynamic-loading"]
+optional = true
 
+[features]
+default = ["cuda"]
+cuda = ["dep:cudarc"]
 
-
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
